@@ -43,6 +43,12 @@ export type Message = {
     writing_direction?: string;
   }[];
 };
+export type Conversation = {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+};
 export type ReviewLog = {
   cardId: string;
   rating: Rating;

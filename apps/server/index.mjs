@@ -245,6 +245,13 @@ const server = http.createServer(async (req, res) => {
         : m,
     );
     const shouldStream = payload.stream === true && !payload.imageMode;
+    const maxTokens = payload.imageMode
+      ? 1800
+      : payload.mode === "quiz"
+        ? 1200
+        : payload.mode === "extract-card"
+          ? 450
+          : 600;
     const upstream = await fetch(`${base}/chat/completions`, {
       method: "POST",
       headers: {
@@ -257,7 +264,7 @@ const server = http.createServer(async (req, res) => {
         messages,
         temperature: 0.55,
         reasoning_effort: "none",
-        max_tokens: payload.imageMode ? 1800 : 1200,
+        max_tokens: maxTokens,
         stream: shouldStream,
       }),
     });

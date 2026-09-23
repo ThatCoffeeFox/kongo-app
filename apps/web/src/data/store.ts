@@ -1,14 +1,32 @@
-import type { Card, Message, ReviewLog } from "../domain/types";
+import type { Card, Conversation, Message, ReviewLog } from "../domain/types";
 
 const DB = "kongo-local-v1";
-const stores = ["cards", "messages", "reviews"];
+const stores = ["cards", "messages", "reviews", "conversations"];
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB, 1);
-    request.onupgradeneeded = () => {
+    const request = indexedDB.open(DB, 2);
+    request.onupgradeneeded = (event) => {
       for (const name of stores)
         if (!request.result.objectStoreNames.contains(name))
           request.result.createObjectStore(name, { keyPath: "id" });
+      const tx = request.transaction;
+      if (tx && event.oldVersion < 2) {
+        const now = Date.now();
+        tx.objectStore("conversations").put({
+          id: "default",
+          title: "Your first conversation",
+          createdAt: now,
+          updatedAt: now,
+        });
+        const messages = tx.objectStore("messages");
+        const cursor = messages.openCursor();
+        cursor.onsuccess = () => {
+          const item = cursor.result;
+          if (!item) return;
+          item.update({ ...item.value, conversationId: "default" });
+          item.continue();
+        };
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -126,13 +144,48 @@ export const store = {
   async saveCard(card: Card) {
     await put("cards", card);
   },
-  async messages() {
-    return (await all<Message>("messages")).sort(
-      (a, b) => a.createdAt - b.createdAt,
-    );
+  async conversations(): Promise<Conversation[]> {
+    let conversations = await all<Conversation>("conversations");
+    if (!conversations.length) {
+      const now = Date.now();
+      const initial = {
+        id: "default",
+        title: "Your first conversation",
+        createdAt: now,
+        updatedAt: now,
+      };
+      await put("conversations", initial);
+      conversations = [initial];
+    }
+    return conversations.sort((a, b) => b.updatedAt - a.updatedAt);
   },
-  async saveMessage(message: Message) {
-    await put("messages", message);
+  async createConversation(): Promise<Conversation> {
+    const now = Date.now();
+    const conversation = {
+      id: crypto.randomUUID(),
+      title: "New conversation",
+      createdAt: now,
+      updatedAt: now,
+    };
+    await put("conversations", conversation);
+    return conversation;
+  },
+  async updateConversation(id: string, update: Partial<Conversation>) {
+    const current = (await all<Conversation>("conversations")).find(
+      (conversation) => conversation.id === id,
+    );
+    if (current) await put("conversations", { ...current, ...update });
+  },
+  async messages(conversationId = "default") {
+    return (await all<Message & { conversationId?: string }>("messages"))
+      .filter(
+        (message) => (message.conversationId || "default") === conversationId,
+      )
+      .sort((a, b) => a.createdAt - b.createdAt);
+  },
+  async saveMessage(message: Message, conversationId = "default") {
+    await put("messages", { ...message, conversationId });
+    await this.updateConversation(conversationId, { updatedAt: Date.now() });
   },
   async reviews() {
     return all<ReviewLog & { id: string }>("reviews");

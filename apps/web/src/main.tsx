@@ -29,7 +29,7 @@ import { analyzeJapanese } from "../../../packages/ai/src/japanese";
 import { parseVisionResult } from "../../../packages/ai/src/vision";
 import { scheduleReview } from "../../../packages/srs/src/index";
 import { store } from "./data/store";
-import type { Card, Message, Rating } from "./domain/types";
+import type { Card, Conversation, Message, Rating } from "./domain/types";
 import "./styles.css";
 
 const API_PREFIX = window.kongoHost?.desktop ? "http://127.0.0.1:3210" : "";
@@ -88,6 +88,9 @@ function App() {
   const [view, setView] = useState<View>("chat"),
     [tab, setTab] = useState<Tab>("references"),
     [messages, setMessages] = useState<Message[]>([]),
+    [conversations, setConversations] = useState<Conversation[]>([]),
+    [activeConversationId, setActiveConversationId] = useState("default"),
+    [mobileContextOpen, setMobileContextOpen] = useState(false),
     [cards, setCards] = useState<Card[]>([]),
     [input, setInput] = useState(""),
     [selected, setSelected] = useState(""),
@@ -148,10 +151,37 @@ function App() {
   useEffect(() => {
     if (import.meta.env.PROD && "serviceWorker" in navigator)
       void navigator.serviceWorker.register("./sw.js");
-    void Promise.all([store.cards(), store.messages()]).then(([c, m]) => {
-      setCards(c);
-      setMessages(m.length ? m : [greeting]);
-    });
+    void Promise.all([store.cards(), store.conversations()]).then(
+      async ([c, chats]) => {
+        setCards(c);
+        setConversations(chats);
+        const preferred = localStorage.getItem("kongo-conversation");
+        const active =
+          chats.find((conversation) => conversation.id === preferred) ||
+          chats[0];
+        if (!active) return;
+        setActiveConversationId(active.id);
+        localStorage.setItem("kongo-conversation", active.id);
+        const m = await store.messages(active.id);
+        setMessages(m.length ? m : [greeting]);
+        if (active.title === "Your first conversation") {
+          const firstPrompt = m.find(
+            (message) => message.role === "user",
+          )?.content;
+          if (firstPrompt) {
+            const title = firstPrompt.replace(/\s+/g, " ").slice(0, 42);
+            await store.updateConversation(active.id, { title });
+            setConversations((items) =>
+              items.map((conversation) =>
+                conversation.id === active.id
+                  ? { ...conversation, title }
+                  : conversation,
+              ),
+            );
+          }
+        }
+      },
+    );
     void apiFetch("/api/status")
       .then((r) => r.json())
       .then((x) => {
@@ -193,6 +223,23 @@ function App() {
   function focusPhrase(text: string) {
     setSelected(text);
     setTab("focus");
+  }
+  async function startConversation() {
+    const conversation = await store.createConversation();
+    setConversations((items) => [conversation, ...items]);
+    setActiveConversationId(conversation.id);
+    localStorage.setItem("kongo-conversation", conversation.id);
+    setMessages([greeting]);
+    setView("chat");
+    setMobileContextOpen(false);
+  }
+  async function openConversation(conversation: Conversation) {
+    setActiveConversationId(conversation.id);
+    localStorage.setItem("kongo-conversation", conversation.id);
+    const saved = await store.messages(conversation.id);
+    setMessages(saved.length ? saved : [greeting]);
+    setView("chat");
+    setMobileContextOpen(false);
   }
   async function addCardFromPhrase(phrase: string) {
     const clean = phrase.trim().replace(/[。！？、,.]+$/, "");
@@ -319,9 +366,41 @@ function App() {
     ]);
     setInput("");
     setBusy(true);
-    void store.saveMessage(user);
+    const activeConversation = conversations.find(
+      (c) => c.id === activeConversationId,
+    );
+    if (
+      !activeConversation ||
+      activeConversation.title === "New conversation" ||
+      activeConversation.title === "Your first conversation"
+    ) {
+      const title =
+        user.content.replace(/\s+/g, " ").slice(0, 42) || "Image reading";
+      void store.updateConversation(activeConversationId, {
+        title,
+        updatedAt: Date.now(),
+      });
+      setConversations((items) =>
+        items.map((c) =>
+          c.id === activeConversationId
+            ? { ...c, title, updatedAt: Date.now() }
+            : c,
+        ),
+      );
+    }
+    void store.saveMessage(user, activeConversationId).then(() => {
+      setConversations((items) =>
+        items
+          .map((conversation) =>
+            conversation.id === activeConversationId
+              ? { ...conversation, updatedAt: Date.now() }
+              : conversation,
+          )
+          .sort((a, b) => b.updatedAt - a.updatedAt),
+      );
+    });
     try {
-      const system = `You are Kongo's warm, precise Japanese Sensei. Teach naturally at JLPT ${level} level unless asked otherwise. Reply mostly in Japanese with brief English support as useful. Keep Japanese phrases intact and add readings in parentheses only when useful. Be careful about uncertainty; do not invent textbook citations. If asked for an explanation, use a short rule, contrast, and natural example. If an image is included, transcribe Japanese, give readings and translation, and note visual/context uncertainty. Never claim external sources were consulted.`;
+      const system = `You are Kongo's warm, precise Japanese Sensei. Teach naturally at JLPT ${level} level unless asked otherwise. Reply mostly in Japanese with brief English support as useful. Keep Japanese phrases intact and add readings in parentheses only when useful. Be careful about uncertainty; do not invent textbook citations. By default, answer in a few clear sentences; for grammar, give a short rule, one useful contrast, and one natural example. Expand when the learner asks for detail. If an image is included, transcribe Japanese, give readings and translation, and note visual/context uncertainty. Never claim external sources were consulted.`;
       const history = next.slice(-12).map((m, i) => ({
         role: m.role,
         content:
@@ -414,7 +493,9 @@ function App() {
       setMessages((items) =>
         items.map((item) => (item.id === botId ? bot : item)),
       );
-      void store.saveMessage(bot);
+      void store.saveMessage(bot, activeConversationId).then(async () => {
+        setConversations(await store.conversations());
+      });
       const json = answer.match(/\{[\s\S]*"cards"\s*:[\s\S]*\}/);
       if (json && !extraImage) {
         try {
@@ -647,6 +728,11 @@ function App() {
         e.preventDefault();
         inputRef.current?.focus();
       }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        void startConversation();
+      }
+      if (e.key === "Escape") setMobileContextOpen(false);
     }
     window.addEventListener("keydown", keys);
     return () => window.removeEventListener("keydown", keys);
@@ -659,12 +745,16 @@ function App() {
   }[view];
   return (
     <div className="app-shell">
-      <aside className="rail">
-        <div className="brand-mark">狐</div>
+      <nav className="rail" aria-label="Primary study tools">
+        <div className="brand-mark" aria-hidden="true">
+          狐
+        </div>
         <div className="rail-sep" />
         <button
           className={`rail-button ${view === "chat" ? "active" : ""}`}
           title="Sensei"
+          aria-label="Sensei conversation"
+          aria-current={view === "chat" ? "page" : undefined}
           onClick={() => setView("chat")}
         >
           <MessageCircle />
@@ -672,6 +762,8 @@ function App() {
         <button
           className={`rail-button ${view === "cards" ? "active" : ""}`}
           title="Lesson cards"
+          aria-label="Lesson cards"
+          aria-current={view === "cards" ? "page" : undefined}
           onClick={() => setView("cards")}
         >
           <Library />
@@ -679,6 +771,8 @@ function App() {
         <button
           className={`rail-button ${view === "quiz" ? "active" : ""}`}
           title="Quick quiz"
+          aria-label="Quick quiz"
+          aria-current={view === "quiz" ? "page" : undefined}
           onClick={() => setView("quiz")}
         >
           <Compass />
@@ -686,6 +780,8 @@ function App() {
         <button
           className={`rail-button ${view === "reader" ? "active" : ""}`}
           title="Image reader"
+          aria-label="Image reader"
+          aria-current={view === "reader" ? "page" : undefined}
           onClick={() => setView("reader")}
         >
           <FileImage />
@@ -694,12 +790,13 @@ function App() {
         <button
           className="rail-button"
           title="Settings"
+          aria-label="Settings"
           onClick={() => setSettings(true)}
         >
           <Settings />
         </button>
         <div className="avatar-small">K</div>
-      </aside>
+      </nav>
       <aside className="sidebar">
         <div className="sidebar-head">
           <div className="brand-word">
@@ -713,14 +810,13 @@ function App() {
             <MoreHorizontal size={18} />
           </button>
         </div>
-        <button
-          className="new-chat"
-          onClick={() => {
-            setMessages([greeting]);
-            setView("chat");
-          }}
-        >
-          <Plus size={16} /> New conversation <span>⌘ K</span>
+        <button className="new-chat" onClick={() => void startConversation()}>
+          <Plus size={16} /> New conversation{" "}
+          <span>
+            {navigator.platform.toLowerCase().includes("mac")
+              ? "⌘ K"
+              : "Ctrl K"}
+          </span>
         </button>
         <div className="nav-label">LEARN</div>
         <button
@@ -755,26 +851,20 @@ function App() {
           <FileImage size={16} /> Image reader
         </button>
         <div className="sidebar-rule" />
-        <div className="nav-label recent-label">
-          RECENT CONVERSATIONS{" "}
+        <div className="nav-label recent-label">RECENT CONVERSATIONS</div>
+        {conversations.slice(0, 4).map((conversation) => (
           <button
-            onClick={() => {
-              setMessages([greeting]);
-              setView("chat");
-            }}
+            key={conversation.id}
+            className={`recent-item ${conversation.id === activeConversationId ? "current" : ""}`}
+            onClick={() => void openConversation(conversation)}
+            title={conversation.title}
           >
-            <Plus size={13} />
+            <span className="recent-bullet" /> {conversation.title}
           </button>
-        </div>
-        <button className="recent-item" onClick={() => setView("chat")}>
-          <span className="recent-bullet" /> Your study conversations
-        </button>
-        <button className="recent-item" onClick={() => setView("chat")}>
-          <span className="recent-bullet" /> は vs が — one more time
-        </button>
-        <button className="recent-item" onClick={() => setView("chat")}>
-          <span className="recent-bullet" /> My weekend plans
-        </button>
+        ))}
+        {!conversations.length && (
+          <p className="recent-empty">Your conversations will appear here.</p>
+        )}
         <div className="sidebar-bottom">
           <div className="study-card">
             <div className="study-card-top">
@@ -826,14 +916,15 @@ function App() {
             <b>{title}</b>
           </div>
           <div className="top-actions">
-            <div
+            <button
               className={`model-pill ${modelReady ? "" : "offline"}`}
               onClick={() => setSettings(true)}
+              aria-label={`Model status: ${modelName}. Open settings.`}
             >
               <span className="status-dot" />
               {modelName}
               <ChevronDown size={13} />
-            </div>
+            </button>
             <button
               className="icon-button"
               aria-label="Help"
@@ -861,10 +952,20 @@ function App() {
                 <button
                   className="level-select"
                   onClick={() => setSettings(true)}
+                  aria-label={`JLPT level ${level}. Change level in settings.`}
                 >
                   <span>JLPT LEVEL</span>
                   {level} Beginner
                   <ChevronDown size={14} />
+                </button>
+                <button
+                  className="context-toggle"
+                  onClick={() => setMobileContextOpen(true)}
+                  aria-label="Open study companion"
+                  aria-expanded={mobileContextOpen}
+                  aria-controls="study-companion-panel"
+                >
+                  <Sparkles size={16} /> Study companion
                 </button>
               </div>
               <div className="chat-scroll">
@@ -993,6 +1094,35 @@ function App() {
                     </div>
                   </div>
                 ))}
+                {!messages.some((m) => m.role === "user") && (
+                  <div
+                    className="starter-prompts"
+                    aria-label="Try a first question"
+                  >
+                    <p>Start with a question like…</p>
+                    <button
+                      onClick={() =>
+                        void send(
+                          "Can you explain the difference between は and が?",
+                        )
+                      }
+                    >
+                      Explain a grammar point
+                    </button>
+                    <button
+                      onClick={() =>
+                        void send(
+                          "Let’s practise ordering a coffee in Japanese.",
+                        )
+                      }
+                    >
+                      Practise a short conversation
+                    </button>
+                    <button onClick={() => setView("reader")}>
+                      Read Japanese from an image
+                    </button>
+                  </div>
+                )}
                 {busy && (
                   <div className="message-row assistant">
                     <div className="message-avatar assistant thinking">狐</div>
@@ -1058,17 +1188,28 @@ function App() {
                 </div>
               </div>
             </section>
-            <aside className="context-panel">
+            {mobileContextOpen && (
+              <button
+                className="context-backdrop"
+                aria-label="Close study companion"
+                onClick={() => setMobileContextOpen(false)}
+              />
+            )}
+            <aside
+              id="study-companion-panel"
+              className={`context-panel ${mobileContextOpen ? "mobile-open" : ""}`}
+            >
               <div className="context-head">
                 <div className="context-title">
                   <Sparkles size={16} />
                   <span>Study companion</span>
                 </div>
                 <button
-                  className="icon-button sm"
-                  onClick={() => setTab("references")}
+                  className="icon-button sm context-close"
+                  onClick={() => setMobileContextOpen(false)}
+                  aria-label="Close study companion"
                 >
-                  <MoreHorizontal size={17} />
+                  <X size={17} />
                 </button>
               </div>
               <div className="context-tabs">

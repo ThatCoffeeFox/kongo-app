@@ -148,6 +148,10 @@ function App() {
   const bottom = useRef<HTMLDivElement>(null),
     file = useRef<HTMLInputElement>(null),
     inputRef = useRef<HTMLTextAreaElement>(null);
+  const contextToggleRef = useRef<HTMLButtonElement>(null),
+    contextCloseRef = useRef<HTMLButtonElement>(null),
+    contextPanelRef = useRef<HTMLElement>(null),
+    contextWasOpenRef = useRef(false);
   useEffect(() => {
     if (import.meta.env.PROD && "serviceWorker" in navigator)
       void navigator.serviceWorker.register("./sw.js");
@@ -209,6 +213,15 @@ function App() {
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy]);
+  useEffect(() => {
+    if (mobileContextOpen) {
+      contextWasOpenRef.current = true;
+      contextCloseRef.current?.focus();
+    } else if (contextWasOpenRef.current) {
+      contextWasOpenRef.current = false;
+      contextToggleRef.current?.focus();
+    }
+  }, [mobileContextOpen]);
   const due = useMemo(
     () => cards.filter((c) => c.dueAt <= Date.now()),
     [cards],
@@ -733,6 +746,22 @@ function App() {
         void startConversation();
       }
       if (e.key === "Escape") setMobileContextOpen(false);
+      if (mobileContextOpen && e.key === "Tab") {
+        const focusable =
+          contextPanelRef.current?.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
+          );
+        if (!focusable?.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last?.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first?.focus();
+        }
+      }
     }
     window.addEventListener("keydown", keys);
     return () => window.removeEventListener("keydown", keys);
@@ -960,12 +989,20 @@ function App() {
                 </button>
                 <button
                   className="context-toggle"
+                  ref={contextToggleRef}
                   onClick={() => setMobileContextOpen(true)}
                   aria-label="Open study companion"
                   aria-expanded={mobileContextOpen}
                   aria-controls="study-companion-panel"
                 >
                   <Sparkles size={16} /> Study companion
+                </button>
+                <button
+                  className="new-conversation-compact"
+                  onClick={() => void startConversation()}
+                  aria-label="Start a new conversation"
+                >
+                  <Plus size={15} /> New chat
                 </button>
               </div>
               <div className="chat-scroll">
@@ -1197,6 +1234,10 @@ function App() {
             )}
             <aside
               id="study-companion-panel"
+              ref={contextPanelRef}
+              role={mobileContextOpen ? "dialog" : undefined}
+              aria-modal={mobileContextOpen ? true : undefined}
+              aria-label={mobileContextOpen ? "Study companion" : undefined}
               className={`context-panel ${mobileContextOpen ? "mobile-open" : ""}`}
             >
               <div className="context-head">
@@ -1206,6 +1247,7 @@ function App() {
                 </div>
                 <button
                   className="icon-button sm context-close"
+                  ref={contextCloseRef}
                   onClick={() => setMobileContextOpen(false)}
                   aria-label="Close study companion"
                 >

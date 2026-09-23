@@ -4,6 +4,9 @@ import { defineConfig } from "vite";
 export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
   base: "./",
+  cacheDir: fileURLToPath(
+    new URL("../../node_modules/.vite/web", import.meta.url),
+  ),
   plugins: [react()],
   server: {
     host: "127.0.0.1",

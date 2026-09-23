@@ -1,0 +1,10 @@
+node_modules/
+node_modules_stale/
+dist/
+.env
+.env.local
+*.log
+.DS_Store
+playwright-report/
+test-results/
+.ux-sweep.md

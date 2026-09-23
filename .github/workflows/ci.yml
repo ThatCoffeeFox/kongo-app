@@ -1,0 +1,65 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  code-quality:
+    name: Code quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test
+
+  production-build:
+    name: Production build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: node -p "require('electron/package.json').version"
+
+  verify:
+    name: verify
+    if: ${{ always() }}
+    needs: [code-quality, unit-tests, production-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every CI subtask to pass
+        env:
+          CODE_QUALITY: ${{ needs.code-quality.result }}
+          UNIT_TESTS: ${{ needs.unit-tests.result }}
+          PRODUCTION_BUILD: ${{ needs.production-build.result }}
+        run: |
+          for check in "Code quality:$CODE_QUALITY" "Unit tests:$UNIT_TESTS" "Production build:$PRODUCTION_BUILD"; do
+            name="${check%%:*}"
+            result="${check#*:}"
+            if [ "$result" != "success" ]; then
+              echo "::error::$name finished with $result"
+              exit 1
+            fi
+          done

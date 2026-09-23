@@ -1,0 +1,44 @@
+{
+  "name": "kongo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/web",
+    "apps/desktop",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k \"npm:bridge\" \"vite --config apps/web/vite.config.ts\"",
+    "build": "tsc --noEmit && vite build --config apps/web/vite.config.ts",
+    "desktop:dev": "concurrently -k \"vite --config apps/web/vite.config.ts\" \"wait-on http://localhost:5173 && electron apps/desktop/main.cjs\"",
+    "check": "biome check apps packages tests package.json tsconfig.json biome.json playwright.config.ts vitest.config.ts",
+    "test": "vitest run",
+    "bridge": "node --env-file-if-exists=.env apps/server/index.mjs",
+    "preview": "vite preview --config apps/web/vite.config.ts",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.14",
+    "@playwright/test": "^1.63.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^9.2.0",
+    "electron": "^44.4.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1",
+    "wait-on": "^8.0.0"
+  },
+  "dependencies": {
+    "better-auth": "^1.7.5",
+    "drizzle-orm": "^0.45.3",
+    "lucide-react": "^1.47.0",
+    "pg": "^8.23.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "ts-fsrs": "4.7.1",
+    "zod": "^4.6.5"
+  }
+}

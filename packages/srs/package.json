@@ -1,0 +1,9 @@
+{
+  "name": "@kongo/srs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "ts-fsrs": "4.7.1"
+  }
+}

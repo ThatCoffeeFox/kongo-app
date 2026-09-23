@@ -1,0 +1,10 @@
+{
+  "name": "Kongo Japanese Learning",
+  "short_name": "Kongo",
+  "lang": "en",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f8f6f1",
+  "theme_color": "#f8f6f1",
+  "description": "Learn Japanese in conversation with Sensei."
+}

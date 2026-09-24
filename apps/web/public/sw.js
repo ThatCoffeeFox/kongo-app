@@ -1,4 +1,5 @@
-const CACHE = "kongo-shell-v1";
+// A new shell cache drops stale HTML and stylesheets after app releases.
+const CACHE = "kongo-shell-v2";
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.add("./")));
   self.skipWaiting();
@@ -37,14 +38,16 @@ self.addEventListener("fetch", (event) => {
     return;
   }
   event.respondWith(
-    caches.match(request).then(
-      (cached) =>
-        cached ||
-        fetch(request).then((response) => {
+    fetch(request)
+      .then((response) => {
+        if (response.ok && response.type === "basic") {
           const copy = response.clone();
           void caches.open(CACHE).then((cache) => cache.put(request, copy));
-          return response;
-        }),
-    ),
+        }
+        return response.ok
+          ? response
+          : caches.match(request).then((cached) => cached || response);
+      })
+      .catch(() => caches.match(request)),
   );
 });

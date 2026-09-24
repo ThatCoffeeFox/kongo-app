@@ -23,9 +23,15 @@ import {
   Volume2,
   X,
 } from "lucide-react";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createRoot } from "react-dom/client";
-import { analyzeJapanese } from "../../../packages/ai/src/japanese";
 import { parseVisionResult } from "../../../packages/ai/src/vision";
 import { scheduleReview } from "../../../packages/srs/src/index";
 import { store } from "./data/store";
@@ -42,6 +48,70 @@ const authClient = createAuthClient({
       : undefined,
   },
 });
+const MarkdownMessage = React.lazy(() =>
+  import("./components/MarkdownMessage").then((module) => ({
+    default: module.MarkdownMessage,
+  })),
+);
+function removeUnrequestedRomaji(text: string) {
+  const withoutInlineRomaji = text.replace(
+    /([\u3040-\u30ff\u3400-\u9fff々ー]+[。！？]?)\s*[\(（]([A-Za-zāīūēōĀĪŪĒŌ]+(?:\s+[A-Za-zāīūēōĀĪŪĒŌ]+)*)(?:[.!?])?[\)）]/g,
+    (match, japanese: string, latin: string) => {
+      const syllable =
+        /^(?:(?:ch|sh|ts|ky|gy|ny|hy|by|py|my|ry|[bcdfghjklmnpqrstvwxyz])?[aeiouāīūēō]|n)+$/i;
+      const tokens = latin.split(/\s+/);
+      const looksLikeRomaji =
+        tokens.every((token) => syllable.test(token)) &&
+        (tokens.some((token) => token.length > 1) ||
+          /^(?:a|e|o|u|wa|ga|o|ni|de|no|to|mo|ya|ne|yo|ka)$/i.test(latin));
+      return looksLikeRomaji ? japanese : match;
+    },
+  );
+  const syllable =
+    /^(?:(?:ch|sh|ts|ky|gy|ny|hy|by|py|my|ry|[bcdfghjklmnpqrstvwxyz])?[aeiouāīūēō]|n)+$/i;
+  const particles =
+    /^(?:wa|ga|o|wo|ni|de|no|to|mo|e|kara|made|yori|ya|ka|ne|yo)$/i;
+  return withoutInlineRomaji
+    .split("\n")
+    .filter((line) => {
+      const romanized = line
+        .trim()
+        .replace(/^(?:[-*]|\d+[.)])\s*/, "")
+        .replace(/[.!?]+$/, "");
+      const tokens = romanized.split(/\s+/);
+      return !(
+        tokens.length >= 2 &&
+        tokens.every((token) => syllable.test(token)) &&
+        tokens.some((token) => particles.test(token))
+      );
+    })
+    .join("\n");
+}
+function removeDuplicateCardReadings(text: string, cards: Card[]) {
+  const cardTerms = cards.map((card) => [card.kanji, card.kana] as const);
+  return [
+    ...vocab.map(([term, reading]) => [term, reading] as const),
+    ...cardTerms,
+  ]
+    .filter(([term, reading]) => term && reading)
+    .reduce(
+      (cleaned, [term, reading]) =>
+        cleaned.replaceAll(`${term}${reading}`, term),
+      text,
+    );
+}
+function clarifyJapaneseWordOrder(text: string, question: string) {
+  if (
+    !/\b(?:word order|SOV|SVO|objects?\b.{0,30}\bverbs?|verbs?\b.{0,30}\bobjects?)\b/i.test(
+      question,
+    )
+  )
+    return text;
+  return text.replace(
+    /Japanese\s+(?:does not|doesn't|never)\s+(?:usually\s+)?(?:put|place|order)\s+(?:the\s+)?objects?\s+before\s+(?:the\s+)?verbs?\.\s*(?:Instead,?\s+it\s+follows[^.]*\.?\s*)?/gi,
+    "Japanese usually places the object before the verb (SOV). ",
+  );
+}
 function apiFetch(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
   if (window.kongoHost?.apiToken)
@@ -55,20 +125,6 @@ type AccountSession = {
 };
 type View = "chat" | "cards" | "quiz" | "reader";
 type Tab = "references" | "focus" | "cards";
-function renderJapanese(text: string) {
-  return analyzeJapanese(text).map((token, index) =>
-    token.reading ? (
-      <ruby key={`${token.surface}-${index}`} title={token.meaning}>
-        {token.surface}
-        <rt>{token.reading}</rt>
-      </ruby>
-    ) : (
-      <React.Fragment key={`${token.surface}-${index}`}>
-        {token.surface}
-      </React.Fragment>
-    ),
-  );
-}
 const greeting: Message = {
   id: "welcome",
   role: "assistant",
@@ -83,6 +139,8 @@ const vocab: [string, string, string][] = [
   ["急ぐ", "いそぐ", "to hurry"],
   ["間に合う", "まにあう", "to be in time"],
   ["気になる", "きになる", "to be curious about"],
+  ["よろしくお願いします", "よろしくおねがいします", "polite greeting"],
+  ["せっかく", "せっかく", "with effort; taking a special opportunity"],
 ];
 function App() {
   const [view, setView] = useState<View>("chat"),
@@ -145,13 +203,19 @@ function App() {
     [pendingCard, setPendingCard] = useState<Card | null>(null),
     [draftBusy, setDraftBusy] = useState(false),
     [notice, setNotice] = useState("");
-  const bottom = useRef<HTMLDivElement>(null),
+  const chatScrollRef = useRef<HTMLDivElement>(null),
+    followChatRef = useRef(true),
     file = useRef<HTMLInputElement>(null),
     inputRef = useRef<HTMLTextAreaElement>(null);
   const contextToggleRef = useRef<HTMLButtonElement>(null),
     contextCloseRef = useRef<HTMLButtonElement>(null),
     contextPanelRef = useRef<HTMLElement>(null),
     contextWasOpenRef = useRef(false);
+  const keepChatPinned = useCallback(() => {
+    const scroller = chatScrollRef.current;
+    if (scroller && followChatRef.current)
+      scroller.scrollTo({ top: scroller.scrollHeight, behavior: "auto" });
+  }, []);
   useEffect(() => {
     if (import.meta.env.PROD && "serviceWorker" in navigator)
       void navigator.serviceWorker.register("./sw.js");
@@ -210,9 +274,7 @@ function App() {
         setModelName("Model bridge offline");
       });
   }, []);
-  useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, busy]);
+  useLayoutEffect(keepChatPinned, [messages, busy, keepChatPinned]);
   useEffect(() => {
     if (mobileContextOpen) {
       contextWasOpenRef.current = true;
@@ -238,6 +300,7 @@ function App() {
     setTab("focus");
   }
   async function startConversation() {
+    followChatRef.current = true;
     const conversation = await store.createConversation();
     setConversations((items) => [conversation, ...items]);
     setActiveConversationId(conversation.id);
@@ -247,6 +310,7 @@ function App() {
     setMobileContextOpen(false);
   }
   async function openConversation(conversation: Conversation) {
+    followChatRef.current = true;
     setActiveConversationId(conversation.id);
     localStorage.setItem("kongo-conversation", conversation.id);
     const saved = await store.messages(conversation.id);
@@ -354,6 +418,7 @@ function App() {
 
   async function send(text = input, extraImage?: string) {
     if ((!text.trim() && !extraImage) || busy) return;
+    followChatRef.current = true;
     const user: Message = {
       id: crypto.randomUUID(),
       role: "user",
@@ -363,6 +428,37 @@ function App() {
       ...(extraImage ? { image: extraImage } : {}),
     };
     const next = [...messages.filter((m) => m.id !== "welcome"), user];
+    const assistantReplyCount = messages.filter(
+      (message) =>
+        message.role === "assistant" &&
+        message.id !== "welcome" &&
+        message.content.trim(),
+    ).length;
+    const noPracticeRequested =
+      /\b(?:just|only)\s+(?:give\s+)?(?:the\s+)?answer\b|\bno\s+(?:quiz|practice|follow[- ]?up)\b/i.test(
+        user.content,
+      );
+    const wantsRomaji = /\b(?:romaji|romanization|romanized)\b/i.test(
+      user.content,
+    );
+    const concisePracticeCards = cards.filter(
+      (card) => card.kanji.length <= 5 && card.meaning.length <= 100,
+    );
+    const practiceCards = (
+      concisePracticeCards.length ? concisePracticeCards : cards
+    )
+      .slice()
+      .sort((a, b) => a.dueAt - b.dueAt || a.createdAt - b.createdAt);
+    const recallCard = practiceCards.length
+      ? practiceCards[
+          Math.floor(assistantReplyCount / 3) % practiceCards.length
+        ]
+      : undefined;
+    const addRecallPractice =
+      !extraImage &&
+      !noPracticeRequested &&
+      Boolean(recallCard) &&
+      assistantReplyCount % 3 === 0;
     const botId = crypto.randomUUID();
     setMessages([
       ...next,
@@ -413,7 +509,31 @@ function App() {
       );
     });
     try {
-      const system = `You are Kongo's warm, precise Japanese Sensei. Teach naturally at JLPT ${level} level unless asked otherwise. Reply mostly in Japanese with brief English support as useful. Keep Japanese phrases intact and add readings in parentheses only when useful. Be careful about uncertainty; do not invent textbook citations. By default, answer in a few clear sentences; for grammar, give a short rule, one useful contrast, and one natural example. Expand when the learner asks for detail. If an image is included, transcribe Japanese, give readings and translation, and note visual/context uncertainty. Never claim external sources were consulted.`;
+      const studied = cards
+        .slice()
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .slice(0, 8)
+        .map(
+          (card) =>
+            `- Term: ${card.kanji} | reading: ${card.kana} | meaning: ${card.meaning}${card.example ? ` | example: ${card.example}` : ""}`,
+        )
+        .join("\n");
+      const system = `You are Kongo's Japanese tutor: warm, natural, precise, and encouraging. The learner is studying at JLPT ${level}; use language and explanations appropriate to that level.
+
+Write only the final learner-facing answer. Never reveal drafts, internal reasoning, self-talk, or stage directions such as “Wait, let me correct that.” If you need to correct an earlier mistake, state the corrected fact once, plainly, and continue. Silently check every Japanese example and grammar claim before answering. For a beginner grammar explanation, state the neutral Japanese order as subject/topic → object → verb (SOV); do not call it SVO or imply that object-before-verb order is arbitrary. Never negate the rule and then immediately restate it (for example, do not write “Japanese does not put objects before verbs. Instead…”). Then explain only the particle needed for the example. Explain particles precisely: を commonly marks the direct object, は the topic, が the subject in many constructions, and に can mark destinations, times, or recipients depending on context.
+
+Use natural conversational language. Answer the question first, then add only the explanation that helps. For N5 word-order questions, use one compact rule sentence, one accurate example, and its translation; do not restate the same rule in a second sentence or a second ordering format. Prefer a few short paragraphs. Use Markdown headings, bullets, and bold only when they make a longer explanation easier to scan. Keep Japanese phrases together; add kana readings when they help this learner. Be honest about uncertainty and never invent citations or claim you consulted a source that was not supplied.
+
+Every response must end cleanly with a complete sentence or a complete practice question. Never leave a sentence, word, list item, or Japanese example unfinished; shorten the answer if needed to finish it within the response budget. Do not end with an ellipsis or a dangling dash.
+
+Teach actively, not as a lecture. Do not add rhetorical questions or generic “does that make sense?” follow-ups. The app adds occasional spaced-recall practice from saved lesson cards, so do not invent a quiz or reveal a card's answer in your own reply. Treat saved material as seen, not mastered.
+
+Write Japanese in Japanese script. Do not use Latin-letter romanization, including particle glosses such as “を (o),” unless the learner asks for romaji. Do not append kana directly after kanji or repeat a card's reading after its term (never write forms like “予約よやく”). Use the term as written; the interface adds ruby readings for supported vocabulary. If an unsupported word needs a reading, place it directly after the kanji and before any particle, as in 猫（ねこ）を—not after the whole phrase.
+
+Saved learning material (seen by the learner; not necessarily mastered):
+${studied || "No saved cards yet. Use only concepts established in this conversation for practice."}
+
+If an image is included, transcribe visible Japanese carefully, give useful readings and a natural translation, and mark uncertain text instead of guessing.`;
       const history = next.slice(-12).map((m, i) => ({
         role: m.role,
         content:
@@ -495,10 +615,20 @@ function App() {
           answer = `The model returned an unstructured reading. You can still select Japanese text in the conversation.\n\n${answer}`;
         }
       }
+      const answerForLearner = removeDuplicateCardReadings(
+        clarifyJapaneseWordOrder(answer.trim(), user.content),
+        cards,
+      );
+      const cleanedAnswer = wantsRomaji
+        ? answerForLearner
+        : removeUnrequestedRomaji(answerForLearner);
       const bot: Message = {
         id: botId,
         role: "assistant",
-        content: answer,
+        content:
+          addRecallPractice && recallCard
+            ? `${cleanedAnswer}\n\n---\n\n**Your turn:** Without looking, how would you use the Japanese word for “${recallCard.meaning.replace(/[.!?。！？]+$/, "")}” in a short sentence?`
+            : cleanedAnswer,
         createdAt: Date.now(),
         citations,
         ...(extraImage ? { regions, scene } : {}),
@@ -888,7 +1018,8 @@ function App() {
             onClick={() => void openConversation(conversation)}
             title={conversation.title}
           >
-            <span className="recent-bullet" /> {conversation.title}
+            <span className="recent-bullet" />
+            <span className="recent-title">{conversation.title}</span>
           </button>
         ))}
         {!conversations.length && (
@@ -1005,7 +1136,21 @@ function App() {
                   <Plus size={15} /> New chat
                 </button>
               </div>
-              <div className="chat-scroll">
+              <div
+                className="chat-scroll"
+                ref={chatScrollRef}
+                role="region"
+                aria-label="Conversation history"
+                tabIndex={0}
+                onScroll={(event) => {
+                  const element = event.currentTarget;
+                  followChatRef.current =
+                    element.scrollHeight -
+                      element.scrollTop -
+                      element.clientHeight <
+                    64;
+                }}
+              >
                 <div className="date-divider">
                   <span /> TODAY <span />
                 </div>
@@ -1055,12 +1200,18 @@ function App() {
                           m.role === "assistant" ? handleSelection : undefined
                         }
                       >
-                        {m.content.split("\n").map((line, j) => (
-                          <span className="bubble-line" key={j}>
-                            {renderJapanese(line)}
-                            <br />
-                          </span>
-                        ))}
+                        <React.Suspense
+                          fallback={
+                            <span className="markdown-loading">
+                              {m.content}
+                            </span>
+                          }
+                        >
+                          <MarkdownMessage
+                            content={m.content}
+                            onRendered={keepChatPinned}
+                          />
+                        </React.Suspense>
                       </div>
                       {m.role === "assistant" &&
                         m.citations &&
@@ -1171,7 +1322,6 @@ function App() {
                     </div>
                   </div>
                 )}
-                <div ref={bottom} />
               </div>
               <div className="composer-wrap">
                 <div className="composer">

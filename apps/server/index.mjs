@@ -16,6 +16,79 @@ const model = process.env.KONGO_MODEL || "qwen3.5:9b";
 const fallbackModel = "qwen3.5:4b";
 const key = process.env.KONGO_MODEL_KEY || "";
 const maxBody = 12 * 1024 * 1024;
+const tutorTurnSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    response: { type: "string" },
+    wordsOfInterest: {
+      type: "array",
+      minItems: 2,
+      maxItems: 4,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          term: { type: "string" },
+          reading: { type: "string" },
+          meaning: { type: "string" },
+        },
+        required: ["term", "reading", "meaning"],
+      },
+    },
+    examples: {
+      type: "array",
+      minItems: 3,
+      maxItems: 3,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          japanese: { type: "string" },
+          reading: { type: "string" },
+          translation: { type: "string" },
+          teachingPoint: { type: "string" },
+        },
+        required: ["japanese", "reading", "translation", "teachingPoint"],
+      },
+    },
+    followUpQuestions: {
+      type: "array",
+      minItems: 1,
+      maxItems: 2,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          japanese: { type: "string" },
+          reading: { type: "string" },
+          translation: { type: "string" },
+        },
+        required: ["japanese", "reading", "translation"],
+      },
+    },
+    savedCardReferences: {
+      type: "array",
+      maxItems: 3,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          cardId: { type: "string" },
+          connection: { type: "string" },
+        },
+        required: ["cardId", "connection"],
+      },
+    },
+  },
+  required: [
+    "response",
+    "wordsOfInterest",
+    "examples",
+    "followUpQuestions",
+    "savedCardReferences",
+  ],
+};
 let authHandler = null;
 if (process.env.DATABASE_URL && process.env.BETTER_AUTH_SECRET) {
   const [
@@ -244,14 +317,21 @@ const server = http.createServer(async (req, res) => {
           }
         : m,
     );
-    const shouldStream = payload.stream === true && !payload.imageMode;
+    const structuredTutor =
+      payload.structuredTutor === true &&
+      !payload.imageMode &&
+      !["quiz", "extract-card"].includes(payload.mode);
+    const shouldStream =
+      payload.stream === true && !payload.imageMode && !structuredTutor;
     const maxTokens = payload.imageMode
       ? 1800
       : payload.mode === "quiz"
         ? 1200
         : payload.mode === "extract-card"
           ? 450
-          : 850;
+          : structuredTutor
+            ? 1400
+            : 850;
     const upstream = await fetch(`${base}/chat/completions`, {
       method: "POST",
       headers: {
@@ -262,10 +342,22 @@ const server = http.createServer(async (req, res) => {
       body: JSON.stringify({
         model,
         messages,
-        temperature: 0.42,
+        temperature: structuredTutor ? 0.25 : 0.42,
         reasoning_effort: "none",
         max_tokens: maxTokens,
         stream: shouldStream,
+        ...(structuredTutor
+          ? {
+              response_format: {
+                type: "json_schema",
+                json_schema: {
+                  name: "kongo_tutor_turn",
+                  strict: true,
+                  schema: tutorTurnSchema,
+                },
+              },
+            }
+          : {}),
       }),
     });
     if (!upstream.ok) {
@@ -341,7 +433,7 @@ const server = http.createServer(async (req, res) => {
       return res.end();
     }
     const result = await upstream.json();
-    const content = result?.choices?.[0]?.message?.content;
+    let content = result?.choices?.[0]?.message?.content;
     if (typeof content !== "string")
       return send(
         res,
@@ -349,18 +441,71 @@ const server = http.createServer(async (req, res) => {
         { error: "The model returned an unexpected response." },
         origin,
       );
+    let usage = result.usage || null;
+    if (structuredTutor) {
+      try {
+        const review = await fetch(`${base}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(key ? { authorization: `Bearer ${key}` } : {}),
+          },
+          signal: AbortSignal.timeout(180000),
+          body: JSON.stringify({
+            model,
+            messages: [
+              {
+                role: "system",
+                content: `You are a meticulous Japanese-language editor reviewing a tutor's structured lesson. Correct inaccuracies, unnatural Japanese, incomplete sentences, and kana-reading mismatches. Preserve the learner's level and Japanese-first style. Verify each example and question reading against its Japanese text, character by character. Keep readings separate from Japanese sentences. For 田中という人, confirm that という means “called” and is made from particle と + verb 言う（いう）. Explain this as a useful, optional name/label pattern, not a required part of every name. Do not split it as とい + う or claim it is unsplittable. Keep exactly 3 examples, 2–4 vocabulary items, one teaching follow-up, and every required field. Do not add unrelated facts or change correct content. Return only the corrected JSON matching the provided schema.`,
+              },
+              { role: "user", content },
+            ],
+            temperature: 0.05,
+            reasoning_effort: "none",
+            max_tokens: 1400,
+            stream: false,
+            response_format: {
+              type: "json_schema",
+              json_schema: {
+                name: "kongo_tutor_turn_review",
+                strict: true,
+                schema: tutorTurnSchema,
+              },
+            },
+          }),
+        });
+        if (review.ok) {
+          const reviewed = await review.json();
+          const corrected = reviewed?.choices?.[0]?.message?.content;
+          if (typeof corrected === "string") {
+            const parsed = JSON.parse(corrected);
+            if (
+              typeof parsed.response === "string" &&
+              Array.isArray(parsed.wordsOfInterest) &&
+              Array.isArray(parsed.examples) &&
+              parsed.examples.length === 3 &&
+              Array.isArray(parsed.followUpQuestions) &&
+              Array.isArray(parsed.savedCardReferences)
+            ) {
+              content = corrected;
+              usage = reviewed.usage || usage;
+            }
+          }
+        }
+      } catch (error) {
+        console.warn(
+          "Tutor quality review failed; keeping the first draft:",
+          error,
+        );
+      }
+    }
     const citedNumbers = new Set(
       [...content.matchAll(/\[(\d+)\]/g)]
         .map((m) => Number(m[1]) - 1)
         .filter((i) => Number.isInteger(i) && i >= 0 && i < retrieved.length),
     );
     const citations = [...citedNumbers].map((i) => retrieved[i]);
-    return send(
-      res,
-      200,
-      { content, model, usage: result.usage || null, citations },
-      origin,
-    );
+    return send(res, 200, { content, model, usage, citations }, origin);
   } catch (error) {
     return send(
       res,

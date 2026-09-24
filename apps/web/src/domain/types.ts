@@ -26,6 +26,30 @@ export type Citation = {
   example: string;
   provenance: string;
 };
+export type TutorTurn = {
+  response: string;
+  wordsOfInterest: {
+    term: string;
+    reading: string;
+    meaning: string;
+  }[];
+  examples: {
+    japanese: string;
+    reading: string;
+    translation: string;
+    teachingPoint: string;
+  }[];
+  followUpQuestions: {
+    japanese: string;
+    reading: string;
+    translation: string;
+  }[];
+  savedCardReferences: {
+    cardId: string;
+    connection: string;
+    isRecallPrompt?: boolean;
+  }[];
+};
 export type Message = {
   id: string;
   role: "user" | "assistant";
@@ -33,6 +57,7 @@ export type Message = {
   createdAt: number;
   image?: string;
   citations?: Citation[];
+  tutorTurn?: TutorTurn;
   scene?: string;
   regions?: {
     box_2d: [number, number, number, number];

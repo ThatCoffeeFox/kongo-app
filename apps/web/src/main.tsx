@@ -34,8 +34,15 @@ import React, {
 import { createRoot } from "react-dom/client";
 import { parseVisionResult } from "../../../packages/ai/src/vision";
 import { scheduleReview } from "../../../packages/srs/src/index";
+import { TutorTurnMessage } from "./components/TutorTurnMessage";
 import { store } from "./data/store";
-import type { Card, Conversation, Message, Rating } from "./domain/types";
+import type {
+  Card,
+  Conversation,
+  Message,
+  Rating,
+  TutorTurn,
+} from "./domain/types";
 import "./styles.css";
 
 const API_PREFIX = window.kongoHost?.desktop ? "http://127.0.0.1:3210" : "";
@@ -140,6 +147,110 @@ function removeDanglingPrompt(text: string) {
     )
     .trim();
 }
+function parseTutorTurn(raw: string): TutorTurn {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error("Sensei returned an incomplete lesson. Please try again.");
+  }
+  if (!value || typeof value !== "object")
+    throw new Error("Sensei returned an incomplete lesson. Please try again.");
+  const turn = value as Partial<TutorTurn>;
+  const validText = (text: unknown) =>
+    typeof text === "string" && Boolean(text.trim());
+  if (
+    !validText(turn.response) ||
+    !Array.isArray(turn.wordsOfInterest) ||
+    turn.wordsOfInterest.length < 2 ||
+    !Array.isArray(turn.examples) ||
+    turn.examples.length < 3 ||
+    !Array.isArray(turn.followUpQuestions) ||
+    turn.followUpQuestions.length < 1 ||
+    !Array.isArray(turn.savedCardReferences)
+  )
+    throw new Error("Sensei returned an incomplete lesson. Please try again.");
+  const wordsOfInterest = turn.wordsOfInterest.filter(
+    (word) =>
+      validText(word?.term) &&
+      validText(word?.reading) &&
+      validText(word?.meaning),
+  );
+  const examples = turn.examples.filter(
+    (example) =>
+      validText(example?.japanese) &&
+      validText(example?.reading) &&
+      validText(example?.translation) &&
+      validText(example?.teachingPoint),
+  );
+  const followUpQuestions = turn.followUpQuestions.filter(
+    (question) =>
+      validText(question?.japanese) &&
+      validText(question?.reading) &&
+      validText(question?.translation),
+  );
+  if (
+    wordsOfInterest.length < 2 ||
+    examples.length < 3 ||
+    followUpQuestions.length < 1
+  )
+    throw new Error("Sensei returned an incomplete lesson. Please try again.");
+  return {
+    response: turn.response!.trim(),
+    wordsOfInterest,
+    examples,
+    followUpQuestions,
+    savedCardReferences: turn.savedCardReferences.filter(
+      (reference) =>
+        validText(reference?.cardId) && validText(reference?.connection),
+    ),
+  };
+}
+function sanitizeTutorTurn(turn: TutorTurn, cards: Card[]): TutorTurn {
+  const cleanJapanese = (text: string) =>
+    removeDuplicateCardReadings(text, cards);
+  const cleanReading = (text: string) =>
+    /^[\u3040-\u309f\u30fc\u3001\u3002\uff01\uff1f\s]*$/u.test(text)
+      ? text
+      : "";
+  return {
+    ...turn,
+    response: cleanJapanese(turn.response),
+    wordsOfInterest: turn.wordsOfInterest.map((word) => ({
+      ...word,
+      term: cleanJapanese(word.term),
+      reading: cleanReading(word.reading),
+    })),
+    examples: turn.examples.map((example) => ({
+      ...example,
+      japanese: cleanJapanese(example.japanese),
+      reading: cleanReading(example.reading),
+      teachingPoint: cleanJapanese(example.teachingPoint),
+    })),
+    followUpQuestions: turn.followUpQuestions.map((question) => ({
+      ...question,
+      japanese: cleanJapanese(question.japanese),
+      reading: cleanReading(question.reading),
+    })),
+  };
+}
+function tutorTurnPlainText(turn: TutorTurn) {
+  return [
+    turn.response,
+    ...turn.examples.flatMap((example) => [
+      `${example.japanese} ${example.reading}`,
+      example.translation,
+      example.teachingPoint,
+    ]),
+    ...turn.wordsOfInterest.map(
+      (word) => `${word.term} (${word.reading}): ${word.meaning}`,
+    ),
+    ...turn.followUpQuestions.map(
+      (question) =>
+        `${question.japanese} ${question.reading}: ${question.translation}`,
+    ),
+  ].join("\n\n");
+}
 function normalizeConversation(messages: Message[], cards: Card[]) {
   let previousQuestion = "";
   return messages.map((message) => {
@@ -147,7 +258,11 @@ function normalizeConversation(messages: Message[], cards: Card[]) {
       previousQuestion = message.content;
       return message;
     }
-    if (message.role !== "assistant" || message.id === "welcome")
+    if (
+      message.role !== "assistant" ||
+      message.id === "welcome" ||
+      message.tutorTurn
+    )
       return message;
     const wantsRomaji = /\b(?:romaji|romanization|romanized)\b/i.test(
       previousQuestion,
@@ -190,6 +305,7 @@ const greeting: Message = {
     "こんにちは！今日も一緒に日本語を勉強しましょう。\n\n何について話したいですか？最近気になっていることでも、日本語で言ってみたい一文でも大丈夫です。",
 };
 const vocab: [string, string, string][] = [
+  ["日本語", "にほんご", "Japanese language"],
   ["大丈夫", "だいじょうぶ", "okay; all right"],
   ["見つける", "みつける", "to find"],
   ["予約", "よやく", "reservation"],
@@ -600,25 +716,27 @@ function App() {
         .slice(0, 8)
         .map(
           (card) =>
-            `- Term: ${card.kanji} | reading: ${card.kana} | meaning: ${card.meaning}${card.example ? ` | example: ${card.example}` : ""}`,
+            `- Card id: ${card.id} | term: ${card.kanji} | reading: ${card.kana} | meaning: ${card.meaning}${card.example ? ` | example: ${card.example}` : ""}`,
         )
         .join("\n");
-      const system = `You are Kongo's Japanese tutor: warm, natural, precise, and encouraging. The learner is studying at JLPT ${level}; use language and explanations appropriate to that level.
+      const spacedRecall =
+        addRecallPractice && recallCard
+          ? `This turn includes a spaced-recall check for saved card ${recallCard.id} (${recallCard.meaning}). Include that exact card id in savedCardReferences. Make one follow-up invite the learner to use the saved word without revealing its Japanese term, reading, or English meaning.`
+          : "No scheduled spaced-recall card for this turn.";
+      const system = `You are Kongo's Japanese tutor: warm, natural, precise, and encouraging. The learner is at JLPT ${level}. Teach actively, keep explanations accurate, and use Japanese as the main language of the lesson.
 
-Write only the final learner-facing answer. Never reveal drafts, internal reasoning, self-talk, or stage directions such as “Wait, let me correct that.” If you need to correct an earlier mistake, state the corrected fact once, plainly, and continue. Silently check every Japanese example and grammar claim before answering. Never invent a grammatical breakdown from the visual shape of a kana sequence: kana spelling alone does not establish morpheme boundaries. Do not split という into とい + う; when its structure is relevant, explain the common name pattern as と + 言う (いう), meaning “called/named.” Do not label a breakdown or conjugation unless it is accurate and useful. For a beginner grammar explanation, state the neutral Japanese order as subject/topic → object → verb (SOV); do not call it SVO or imply that object-before-verb order is arbitrary. Never negate the rule and then immediately restate it (for example, do not write “Japanese does not put objects before verbs. Instead…”). Explain particles precisely: を commonly marks the direct object, は the topic, が the subject in many constructions, and に can mark destinations, times, or recipients depending on context.
+Return exactly one JSON object matching the response schema. Do not wrap it in Markdown fences or add text outside it. Fill every field: response, wordsOfInterest (2–4), exactly 3 examples, 1 followUpQuestion, and savedCardReferences (0–3). Keep each entry short and fact-checked.
 
-Use natural conversational language. Answer the question first, then add only the explanation that helps. Keep ordinary answers to about 120 words; use more only when the learner asks for detail. For simple grammar questions, avoid headings and lists: give the rule, one accurate example, and a short translation. For N5 word-order questions, use one compact rule sentence, one accurate example, and its translation; do not restate the same rule in a second sentence or a second ordering format. Use Markdown structure only when it makes a longer explanation easier to scan. Keep Japanese phrases together; add kana readings when they help this learner. Be honest about uncertainty and never invent citations or claim you consulted a source that was not supplied.
+Language and teaching: use Japanese as the main language throughout. The response field is ONLY the direct explanation: write 2–4 natural, level-appropriate Japanese sentences, then at most one brief English clarification. Do not put examples, practice tasks, questions, headings, recaps, or meta commentary in response; those have dedicated fields. Provide exactly 3 distinct, complete Japanese example sentences that demonstrate the point, each with an accurate kana reading, concise English translation, and a short Japanese teachingPoint. The japanese field must contain only the complete Japanese sentence: never insert readings beside kanji or use romaji there. Put the full hiragana reading only in the reading field. Treat every reading as graded material: read each sentence character by character and check kanji readings and verb conjugations before returning it (for example, 来ました is きました). If uncertain about a reading, choose simpler Japanese you know how to read accurately. Make the examples progress from simple to natural, and teach the target point explicitly. Each sentence must sound natural and include the target grammar correctly. In wordsOfInterest, include 2–4 useful Japanese terms with accurate kana readings and concise English meanings. In followUpQuestions, ask one relevant, answerable question that makes the learner produce the target pattern or apply the current lesson; do not switch to unrelated small talk. Check that its kana reading exactly matches the Japanese question. Finish every sentence cleanly.
 
-Every response must end cleanly with a complete sentence or a complete practice question. Never leave a sentence, word, list item, or Japanese example unfinished; shorten the answer if needed to finish it within the response budget. Do not end with an ellipsis or a dangling dash.
+Japanese accuracy: kana spelling alone does not reveal morpheme boundaries. For the name pattern 田中という人, clearly explain 「という」 as “called.” Show its grammar as 助詞「と」＋動詞「言う（いう）」 and describe it as a useful, optional name/label pattern. Do not split it as とい + う or claim it is unsplittable. For beginner word order, use topic/subject → object → verb (SOV), never SVO. Explain particles accurately: を commonly marks the direct object, は the topic, が the subject in many constructions, and に has several context-dependent uses. Use Japanese script; do not use romaji unless the learner specifically asks for it. Never reveal drafts, self-talk, or corrections in progress. Do not invent facts, citations, or saved cards.
 
-Teach actively, not as a lecture. Do not add rhetorical questions, generic “does that make sense?” follow-ups, or unsolicited practice sections. The app adds occasional spaced-recall practice from saved lesson cards, so do not invent a quiz or reveal a card's answer in your own reply. Treat saved material as seen, not mastered. If the learner asks for a practice challenge, give one complete, natural question and end it there; never append a half-written suggestion or introduce a second task.
+Saved cards are previous learning material, not proof of mastery. Select references only by exact card id from this list, and include a short explanation of the connection. Use an empty array if no card is relevant. ${spacedRecall}
 
-Write Japanese in Japanese script. Do not use Latin-letter romanization, including particle glosses such as “を (o),” unless the learner asks for romaji. Do not append kana directly after kanji or repeat a card's reading after its term (never write forms like “予約よやく”). Use the term as written; the interface adds ruby readings for supported vocabulary. If an unsupported word needs a reading, place it directly after the kanji and before any particle, as in 猫（ねこ）を—not after the whole phrase.
+Saved cards:
+${studied || "No saved cards yet."}
 
-Saved learning material (seen by the learner; not necessarily mastered):
-${studied || "No saved cards yet. Use only concepts established in this conversation for practice."}
-
-If an image is included, transcribe visible Japanese carefully, give useful readings and a natural translation, and mark uncertain text instead of guessing.`;
+If an image is included, read its Japanese accurately and mark uncertain text rather than guessing.`;
       const history = next.slice(-12).map((m, i) => ({
         role: m.role,
         content:
@@ -627,7 +745,9 @@ If an image is included, transcribe visible Japanese carefully, give useful read
                 { type: "text", text: m.content },
                 { type: "image_url", image_url: { url: m.image } },
               ]
-            : m.content,
+            : m.tutorTurn
+              ? JSON.stringify(m.tutorTurn)
+              : m.content,
       }));
       const response = await apiFetch("/api/chat", {
         method: "POST",
@@ -635,7 +755,8 @@ If an image is included, transcribe visible Japanese carefully, give useful read
         body: JSON.stringify({
           messages: [{ role: "system", content: system }, ...history],
           imageMode: Boolean(extraImage),
-          stream: !extraImage,
+          structuredTutor: !extraImage,
+          stream: false,
         }),
       });
       if (!response.ok) {
@@ -643,6 +764,7 @@ If an image is included, transcribe visible Japanese carefully, give useful read
         throw new Error(error.error || "Model request failed");
       }
       let answer = "",
+        tutorTurn: TutorTurn | undefined,
         citations: Message["citations"] = [],
         regions: Message["regions"],
         scene = "";
@@ -650,6 +772,66 @@ If an image is included, transcribe visible Japanese carefully, give useful read
         const data = await response.json();
         answer = data.content;
         citations = data.citations || [];
+      } else if (!extraImage) {
+        const data = await response.json();
+        tutorTurn = sanitizeTutorTurn(parseTutorTurn(data.content), cards);
+        const validReferences = tutorTurn.savedCardReferences.filter((ref) =>
+          cards.some((card) => card.id === ref.cardId),
+        );
+        const explicitlyMentionedCards = cards.filter(
+          (card) =>
+            (user.content.includes(card.kanji) ||
+              user.content.includes(card.kana)) &&
+            card.id !== recallCard?.id,
+        );
+        const mergedReferences = [...validReferences];
+        for (const card of explicitlyMentionedCards) {
+          if (!mergedReferences.some((ref) => ref.cardId === card.id))
+            mergedReferences.unshift({
+              cardId: card.id,
+              connection:
+                "You asked to connect this saved card to today's lesson.",
+            });
+        }
+        tutorTurn = {
+          ...tutorTurn,
+          savedCardReferences: mergedReferences.slice(0, 3),
+          followUpQuestions: [
+            {
+              japanese:
+                "今学んだ表現を使って、自分について一文書いてみましょう。",
+              reading:
+                "いままなんだひょうげんをつかって、じぶんについていちぶんかいてみましょう。",
+              translation:
+                "Write one sentence about yourself using the expression you just learned.",
+            },
+          ],
+        };
+        if (addRecallPractice && recallCard) {
+          const references = tutorTurn.savedCardReferences.filter(
+            (ref) => ref.cardId !== recallCard.id,
+          );
+          tutorTurn.savedCardReferences = [
+            ...references.slice(0, 2),
+            {
+              cardId: recallCard.id,
+              connection: "Due for a quick recall review.",
+              isRecallPrompt: true,
+            },
+          ];
+          const meaning = recallCard.meaning.replace(/[.!?。！？;:]+$/u, "");
+          tutorTurn.followUpQuestions = [
+            ...tutorTurn.followUpQuestions.slice(0, 1),
+            {
+              japanese: "この言葉を使って、短い文を作ってみましょう。",
+              reading:
+                "このことばをつかって、みじかいぶんをつくってみましょう。",
+              translation: `Make a short Japanese sentence using the word you saved for “${meaning}.”`,
+            },
+          ];
+        }
+        citations = data.citations || [];
+        answer = tutorTurnPlainText(tutorTurn);
       } else if (response.body) {
         const reader = response.body.getReader(),
           decoder = new TextDecoder();
@@ -700,27 +882,30 @@ If an image is included, transcribe visible Japanese carefully, give useful read
           answer = `The model returned an unstructured reading. You can still select Japanese text in the conversation.\n\n${answer}`;
         }
       }
-      const answerForLearner = removeDuplicateCardReadings(
-        repairCommonTutorErrors(
-          clarifyJapaneseWordOrder(answer.trim(), user.content),
-        ),
-        cards,
-      );
-      const practiceCleanedAnswer = removeDanglingPrompt(
-        removeUnrequestedPractice(answerForLearner, user.content),
-      );
-      const cleanedAnswer = wantsRomaji
-        ? practiceCleanedAnswer
-        : removeUnrequestedRomaji(practiceCleanedAnswer);
+      const answerForLearner = tutorTurn
+        ? answer
+        : removeDuplicateCardReadings(
+            repairCommonTutorErrors(
+              clarifyJapaneseWordOrder(answer.trim(), user.content),
+            ),
+            cards,
+          );
+      const practiceCleanedAnswer = tutorTurn
+        ? answerForLearner
+        : removeDanglingPrompt(
+            removeUnrequestedPractice(answerForLearner, user.content),
+          );
+      const cleanedAnswer =
+        wantsRomaji || tutorTurn
+          ? practiceCleanedAnswer
+          : removeUnrequestedRomaji(practiceCleanedAnswer);
       const bot: Message = {
         id: botId,
         role: "assistant",
-        content:
-          addRecallPractice && recallCard
-            ? `${cleanedAnswer}\n\n---\n\n**Quick recall:** Make one short Japanese sentence using the word for “${recallCard.meaning.replace(/[.!?。！？]+$/, "")}.”`
-            : cleanedAnswer,
+        content: cleanedAnswer,
         createdAt: Date.now(),
         citations,
+        ...(tutorTurn ? { tutorTurn } : {}),
         ...(extraImage ? { regions, scene } : {}),
       };
       setMessages((items) =>
@@ -1266,8 +1451,16 @@ If an image is included, transcribe visible Japanese carefully, give useful read
                             title="Listen"
                             aria-label="Read response aloud in Japanese"
                             onClick={() => {
+                              const speechText = m.tutorTurn
+                                ? [
+                                    m.tutorTurn.response,
+                                    ...m.tutorTurn.examples.map(
+                                      (example) => example.japanese,
+                                    ),
+                                  ].join("。")
+                                : m.content;
                               const utterance = new SpeechSynthesisUtterance(
-                                m.content,
+                                speechText,
                               );
                               utterance.lang = "ja-JP";
                               window.speechSynthesis?.speak(utterance);
@@ -1297,10 +1490,32 @@ If an image is included, transcribe visible Japanese carefully, give useful read
                             </span>
                           }
                         >
-                          <MarkdownMessage
-                            content={m.content}
-                            onRendered={keepChatPinned}
-                          />
+                          {m.tutorTurn ? (
+                            <TutorTurnMessage
+                              turn={m.tutorTurn}
+                              cards={cards}
+                              renderMarkdown={(content) => (
+                                <MarkdownMessage
+                                  content={content}
+                                  onRendered={keepChatPinned}
+                                />
+                              )}
+                              onFollowUp={(question) => void send(question)}
+                              onSaveWord={(word) =>
+                                void addCardFromPhrase(word)
+                              }
+                              onOpenCards={() => {
+                                setTab("cards");
+                                if (window.innerWidth <= 680)
+                                  setMobileContextOpen(true);
+                              }}
+                            />
+                          ) : (
+                            <MarkdownMessage
+                              content={m.content}
+                              onRendered={keepChatPinned}
+                            />
+                          )}
                         </React.Suspense>
                       </div>
                       {m.role === "assistant" &&
@@ -1311,7 +1526,7 @@ If an image is included, transcribe visible Japanese carefully, give useful read
                             {m.citations.map((c) => c.section).join(" · ")}
                           </div>
                         )}
-                      {m.role === "assistant" && i > 0 && (
+                      {m.role === "assistant" && i > 0 && !m.tutorTurn && (
                         <div className="focus-badges">
                           {[
                             ...new Set(
@@ -1341,22 +1556,24 @@ If an image is included, transcribe visible Japanese carefully, give useful read
                       {m.role === "assistant" && i > 0 && (
                         <div className="message-tools">
                           <button
-                            onClick={() =>
+                            onClick={() => {
+                              const content =
+                                m.tutorTurn?.response || m.content;
                               focusPhrase(
-                                m.content.split(/[。！？\n]/)[0] || m.content,
-                              )
-                            }
+                                content.split(/[。！？\n]/)[0] || content,
+                              );
+                            }}
                           >
                             <Sparkles size={13} /> Explain
                           </button>
                           <button
-                            onClick={() =>
-                              addCardFromPhrase(
-                                m.content.match(
-                                  /[\u3040-\u30ff\u3400-\u9fff]{2,}/,
-                                )?.[0] || m.content.slice(0, 14),
-                              )
-                            }
+                            onClick={() => {
+                              const word =
+                                m.tutorTurn?.wordsOfInterest[0]?.term ||
+                                m.content.match(/[぀-ヿ㐀-鿿]{2,}/)?.[0] ||
+                                m.content.slice(0, 14);
+                              addCardFromPhrase(word);
+                            }}
                           >
                             <BookOpen size={13} /> Save to cards
                           </button>

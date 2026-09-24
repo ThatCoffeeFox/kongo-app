@@ -6,20 +6,20 @@
   text-rendering: optimizeLegibility;
   font-optical-sizing: auto;
   font-weight: 400;
-  --paper: oklch(97.1% 0.012 76);
-  --white: oklch(99.3% 0.007 85);
+  --paper: oklch(95.8% 0.017 78);
+  --white: oklch(96.9% 0.014 80);
   --ink: oklch(26% 0.02 62);
   --muted: oklch(47% 0.018 73);
   --quiet: oklch(58% 0.017 75);
   --text-body: oklch(37% 0.018 67);
-  --line: oklch(88% 0.014 77);
+  --line: oklch(85.5% 0.017 77);
   --orange: oklch(55% 0.16 42);
-  --pale: oklch(94% 0.035 52);
+  --pale: oklch(91.4% 0.033 54);
   --green: oklch(47% 0.075 145);
-  --surface-nav: oklch(95.1% 0.016 74);
-  --surface-soft: oklch(96.5% 0.015 77);
-  --surface-hover: oklch(93.2% 0.022 53);
-  --accent-ink: oklch(43% 0.12 42);
+  --surface-nav: oklch(93.8% 0.019 76);
+  --surface-soft: oklch(95% 0.018 78);
+  --surface-hover: oklch(89.8% 0.026 57);
+  --accent-ink: oklch(39% 0.115 42);
   --space-xs: 4px;
   --space-sm: 8px;
   --space-md: 12px;
@@ -3655,5 +3655,209 @@ button:disabled {
   }
   .bubble pre {
     background: var(--surface-nav);
+  }
+}
+
+/* Right companion rail: keep the washi palette tactile and its small controls legible. */
+.context-panel {
+  background: var(--surface-soft);
+}
+.context-head {
+  min-height: 54px;
+  height: auto;
+  padding-inline: 17px;
+}
+.context-title {
+  font-size: 14px;
+  color: var(--ink);
+}
+.context-tabs {
+  min-height: 44px;
+  height: auto;
+  gap: 18px;
+  padding-inline: 17px;
+}
+.context-tabs button {
+  min-height: 44px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.context-tabs button:hover {
+  border-radius: 6px;
+  background: var(--surface-hover);
+  color: var(--accent-ink);
+}
+.context-tabs button.active {
+  color: var(--ink);
+}
+.context-tabs button span {
+  background: color-mix(in oklch, var(--surface-nav) 76%, var(--surface-soft));
+  color: var(--muted);
+  font-size: 10px;
+}
+.context-body {
+  padding: 17px;
+}
+.tiny-icon:hover {
+  background: var(--surface-hover);
+  color: var(--accent-ink);
+}
+.no-citations {
+  border-color: var(--line);
+  color: var(--muted);
+}
+.no-citations b {
+  color: var(--ink);
+  font-size: 13px;
+}
+.no-citations span {
+  color: var(--text-body);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.panel-intro b {
+  color: var(--ink);
+  font-size: 13px;
+}
+.panel-intro small,
+.source-status,
+.reference-source,
+.companion-footer span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.source-status {
+  border-color: var(--line);
+}
+.reference-card {
+  border-color: var(--line);
+}
+.reference-card h3 {
+  color: var(--ink);
+  font-size: 14px;
+}
+.reference-card p {
+  color: var(--text-body);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.reference-example {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--pale) 38%, var(--surface-soft));
+  color: var(--text-body);
+  font-size: 12px;
+}
+.citation-link,
+.all-sources {
+  min-height: 40px;
+  color: var(--accent-ink);
+  font-size: 12px;
+}
+.citation-link:hover,
+.all-sources:hover {
+  color: var(--ink);
+}
+.companion-footer {
+  background: color-mix(in oklch, var(--surface-nav) 58%, var(--surface-soft));
+}
+.companion-footer b {
+  color: var(--ink);
+  font-size: 12px;
+}
+.selected-phrase {
+  color: var(--ink);
+}
+.focus-intro {
+  color: var(--muted);
+  font-size: 11px;
+}
+.focus-reading {
+  color: var(--muted);
+  font-size: 15px;
+}
+.focus-actions button {
+  min-height: 44px;
+  border-color: var(--line);
+  background: var(--white);
+  color: var(--text-body);
+  font-size: 12px;
+}
+.focus-actions button:hover,
+.mini-card button:hover,
+.companion-footer > button:hover {
+  border-color: color-mix(in oklch, var(--orange) 38%, var(--line));
+  background: var(--surface-hover);
+  color: var(--accent-ink);
+}
+.focus-actions svg {
+  color: var(--accent-ink);
+}
+.focus-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.mini-card {
+  border-color: var(--line);
+}
+.mini-card b {
+  color: var(--ink);
+  font-size: 17px;
+}
+.mini-card small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.mini-card button {
+  width: 34px;
+  height: 34px;
+  color: var(--muted);
+}
+.nav-item:hover,
+.recent-item:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+.nav-item:hover svg {
+  color: var(--accent-ink);
+}
+.new-chat,
+.message-tools button,
+.starter-prompts button,
+.composer,
+.context-toggle,
+.new-conversation-compact {
+  background-color: var(--white);
+}
+.starter-prompts button:hover,
+.message-tools button:hover {
+  color: var(--ink);
+}
+
+@media (prefers-color-scheme: dark) {
+  .new-chat span {
+    background: color-mix(
+      in oklch,
+      var(--surface-nav) 76%,
+      var(--surface-soft)
+    );
+    color: var(--muted);
+  }
+  .nav-count {
+    background: var(--surface-hover);
+    color: var(--ink);
+  }
+  .context-tabs button:hover,
+  .focus-actions button:hover,
+  .mini-card button:hover,
+  .companion-footer > button:hover,
+  .citation-link:hover,
+  .all-sources:hover,
+  .nav-item:hover,
+  .recent-item:hover,
+  .starter-prompts button:hover,
+  .message-tools button:hover {
+    color: var(--ink);
   }
 }

@@ -112,6 +112,63 @@ function clarifyJapaneseWordOrder(text: string, question: string) {
     "Japanese usually places the object before the verb (SOV). ",
   );
 }
+function repairCommonTutorErrors(text: string) {
+  return text.replace(
+    /\*{0,2}Words\*{0,2}\s*:\s*とい\s*(?:\(to i\)\s*)?\+\s*う\s*(?:\(u\))?\.?/gi,
+    "**Word form:** In 「という人」, という means “a person called or named …”.",
+  );
+}
+function removeUnrequestedPractice(text: string, question: string) {
+  if (
+    /\b(?:quiz me|test me|practice|practise|exercise|drill|challenge me)\b/i.test(
+      question,
+    )
+  )
+    return text;
+  return text
+    .replace(
+      /\n{0,2}(?:#{1,4}\s*)?(?:Practice\s+(?:Challenge|Prompt)|Your\s+turn|Quick\s+recall)\s*:?\s*[\s\S]*$/i,
+      "",
+    )
+    .trim();
+}
+function removeDanglingPrompt(text: string) {
+  return text
+    .replace(
+      /\s*(?:Now,?\s+add\s+(?:a|an|the)\s+(?:verb|word|particle)\s+(?:like|such as))\s*$/i,
+      "",
+    )
+    .trim();
+}
+function normalizeConversation(messages: Message[], cards: Card[]) {
+  let previousQuestion = "";
+  return messages.map((message) => {
+    if (message.role === "user") {
+      previousQuestion = message.content;
+      return message;
+    }
+    if (message.role !== "assistant" || message.id === "welcome")
+      return message;
+    const wantsRomaji = /\b(?:romaji|romanization|romanized)\b/i.test(
+      previousQuestion,
+    );
+    const content = removeDanglingPrompt(
+      removeUnrequestedPractice(
+        repairCommonTutorErrors(
+          removeDuplicateCardReadings(
+            clarifyJapaneseWordOrder(message.content, previousQuestion),
+            cards,
+          ),
+        ),
+        previousQuestion,
+      ),
+    );
+    return {
+      ...message,
+      content: wantsRomaji ? content : removeUnrequestedRomaji(content),
+    };
+  });
+}
 function apiFetch(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
   if (window.kongoHost?.apiToken)
@@ -217,8 +274,20 @@ function App() {
       scroller.scrollTo({ top: scroller.scrollHeight, behavior: "auto" });
   }, []);
   useEffect(() => {
-    if (import.meta.env.PROD && "serviceWorker" in navigator)
-      void navigator.serviceWorker.register("./sw.js");
+    if (import.meta.env.PROD && "serviceWorker" in navigator) {
+      const hadController = Boolean(navigator.serviceWorker.controller);
+      navigator.serviceWorker.addEventListener(
+        "controllerchange",
+        () => {
+          if (hadController) window.location.reload();
+        },
+        { once: true },
+      );
+      void navigator.serviceWorker
+        .register("./sw.js", { updateViaCache: "none" })
+        .then((registration) => registration.update())
+        .catch(() => undefined);
+    }
     void Promise.all([store.cards(), store.conversations()]).then(
       async ([c, chats]) => {
         setCards(c);
@@ -231,7 +300,11 @@ function App() {
         setActiveConversationId(active.id);
         localStorage.setItem("kongo-conversation", active.id);
         const m = await store.messages(active.id);
-        setMessages(m.length ? m : [greeting]);
+        const normalized = normalizeConversation(m, c);
+        setMessages(normalized.length ? normalized : [greeting]);
+        for (const [index, message] of normalized.entries())
+          if (message.content !== m[index]?.content)
+            void store.saveMessage(message, active.id);
         if (active.title === "Your first conversation") {
           const firstPrompt = m.find(
             (message) => message.role === "user",
@@ -313,8 +386,15 @@ function App() {
     followChatRef.current = true;
     setActiveConversationId(conversation.id);
     localStorage.setItem("kongo-conversation", conversation.id);
-    const saved = await store.messages(conversation.id);
-    setMessages(saved.length ? saved : [greeting]);
+    const [saved, savedCards] = await Promise.all([
+      store.messages(conversation.id),
+      store.cards(),
+    ]);
+    const normalized = normalizeConversation(saved, savedCards);
+    setMessages(normalized.length ? normalized : [greeting]);
+    for (const [index, message] of normalized.entries())
+      if (message.content !== saved[index]?.content)
+        void store.saveMessage(message, conversation.id);
     setView("chat");
     setMobileContextOpen(false);
   }
@@ -438,6 +518,10 @@ function App() {
       /\b(?:just|only)\s+(?:give\s+)?(?:the\s+)?answer\b|\bno\s+(?:quiz|practice|follow[- ]?up)\b/i.test(
         user.content,
       );
+    const practiceRequested =
+      /\b(?:quiz me|test me|practice|practise|exercise|drill|challenge me)\b/i.test(
+        user.content,
+      );
     const wantsRomaji = /\b(?:romaji|romanization|romanized)\b/i.test(
       user.content,
     );
@@ -457,6 +541,7 @@ function App() {
     const addRecallPractice =
       !extraImage &&
       !noPracticeRequested &&
+      !practiceRequested &&
       Boolean(recallCard) &&
       assistantReplyCount % 3 === 0;
     const botId = crypto.randomUUID();
@@ -520,13 +605,13 @@ function App() {
         .join("\n");
       const system = `You are Kongo's Japanese tutor: warm, natural, precise, and encouraging. The learner is studying at JLPT ${level}; use language and explanations appropriate to that level.
 
-Write only the final learner-facing answer. Never reveal drafts, internal reasoning, self-talk, or stage directions such as “Wait, let me correct that.” If you need to correct an earlier mistake, state the corrected fact once, plainly, and continue. Silently check every Japanese example and grammar claim before answering. For a beginner grammar explanation, state the neutral Japanese order as subject/topic → object → verb (SOV); do not call it SVO or imply that object-before-verb order is arbitrary. Never negate the rule and then immediately restate it (for example, do not write “Japanese does not put objects before verbs. Instead…”). Then explain only the particle needed for the example. Explain particles precisely: を commonly marks the direct object, は the topic, が the subject in many constructions, and に can mark destinations, times, or recipients depending on context.
+Write only the final learner-facing answer. Never reveal drafts, internal reasoning, self-talk, or stage directions such as “Wait, let me correct that.” If you need to correct an earlier mistake, state the corrected fact once, plainly, and continue. Silently check every Japanese example and grammar claim before answering. Never invent a grammatical breakdown from the visual shape of a kana sequence: kana spelling alone does not establish morpheme boundaries. Do not split という into とい + う; when its structure is relevant, explain the common name pattern as と + 言う (いう), meaning “called/named.” Do not label a breakdown or conjugation unless it is accurate and useful. For a beginner grammar explanation, state the neutral Japanese order as subject/topic → object → verb (SOV); do not call it SVO or imply that object-before-verb order is arbitrary. Never negate the rule and then immediately restate it (for example, do not write “Japanese does not put objects before verbs. Instead…”). Explain particles precisely: を commonly marks the direct object, は the topic, が the subject in many constructions, and に can mark destinations, times, or recipients depending on context.
 
-Use natural conversational language. Answer the question first, then add only the explanation that helps. For N5 word-order questions, use one compact rule sentence, one accurate example, and its translation; do not restate the same rule in a second sentence or a second ordering format. Prefer a few short paragraphs. Use Markdown headings, bullets, and bold only when they make a longer explanation easier to scan. Keep Japanese phrases together; add kana readings when they help this learner. Be honest about uncertainty and never invent citations or claim you consulted a source that was not supplied.
+Use natural conversational language. Answer the question first, then add only the explanation that helps. Keep ordinary answers to about 120 words; use more only when the learner asks for detail. For simple grammar questions, avoid headings and lists: give the rule, one accurate example, and a short translation. For N5 word-order questions, use one compact rule sentence, one accurate example, and its translation; do not restate the same rule in a second sentence or a second ordering format. Use Markdown structure only when it makes a longer explanation easier to scan. Keep Japanese phrases together; add kana readings when they help this learner. Be honest about uncertainty and never invent citations or claim you consulted a source that was not supplied.
 
 Every response must end cleanly with a complete sentence or a complete practice question. Never leave a sentence, word, list item, or Japanese example unfinished; shorten the answer if needed to finish it within the response budget. Do not end with an ellipsis or a dangling dash.
 
-Teach actively, not as a lecture. Do not add rhetorical questions or generic “does that make sense?” follow-ups. The app adds occasional spaced-recall practice from saved lesson cards, so do not invent a quiz or reveal a card's answer in your own reply. Treat saved material as seen, not mastered.
+Teach actively, not as a lecture. Do not add rhetorical questions, generic “does that make sense?” follow-ups, or unsolicited practice sections. The app adds occasional spaced-recall practice from saved lesson cards, so do not invent a quiz or reveal a card's answer in your own reply. Treat saved material as seen, not mastered. If the learner asks for a practice challenge, give one complete, natural question and end it there; never append a half-written suggestion or introduce a second task.
 
 Write Japanese in Japanese script. Do not use Latin-letter romanization, including particle glosses such as “を (o),” unless the learner asks for romaji. Do not append kana directly after kanji or repeat a card's reading after its term (never write forms like “予約よやく”). Use the term as written; the interface adds ruby readings for supported vocabulary. If an unsupported word needs a reading, place it directly after the kanji and before any particle, as in 猫（ねこ）を—not after the whole phrase.
 
@@ -616,18 +701,23 @@ If an image is included, transcribe visible Japanese carefully, give useful read
         }
       }
       const answerForLearner = removeDuplicateCardReadings(
-        clarifyJapaneseWordOrder(answer.trim(), user.content),
+        repairCommonTutorErrors(
+          clarifyJapaneseWordOrder(answer.trim(), user.content),
+        ),
         cards,
       );
+      const practiceCleanedAnswer = removeDanglingPrompt(
+        removeUnrequestedPractice(answerForLearner, user.content),
+      );
       const cleanedAnswer = wantsRomaji
-        ? answerForLearner
-        : removeUnrequestedRomaji(answerForLearner);
+        ? practiceCleanedAnswer
+        : removeUnrequestedRomaji(practiceCleanedAnswer);
       const bot: Message = {
         id: botId,
         role: "assistant",
         content:
           addRecallPractice && recallCard
-            ? `${cleanedAnswer}\n\n---\n\n**Your turn:** Without looking, how would you use the Japanese word for “${recallCard.meaning.replace(/[.!?。！？]+$/, "")}” in a short sentence?`
+            ? `${cleanedAnswer}\n\n---\n\n**Quick recall:** Make one short Japanese sentence using the word for “${recallCard.meaning.replace(/[.!?。！？]+$/, "")}.”`
             : cleanedAnswer,
         createdAt: Date.now(),
         citations,

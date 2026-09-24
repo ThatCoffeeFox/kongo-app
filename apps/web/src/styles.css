@@ -1,20 +1,30 @@
 :root {
   font-family: "Aptos", "Yu Gothic UI", "Meiryo", sans-serif;
-  color: #252522;
-  background: #f8f6f1;
+  color: var(--ink);
+  background: var(--paper);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   font-optical-sizing: auto;
   font-weight: 400;
-  --paper: #f8f6f1;
-  --white: #fffefa;
-  --ink: #292925;
-  --muted: #8b8981;
-  --quiet: #aaa79f;
-  --line: #eae7df;
-  --orange: #d8663d;
-  --pale: #fbede5;
-  --green: #477458;
+  --paper: oklch(97.1% 0.012 76);
+  --white: oklch(99.3% 0.007 85);
+  --ink: oklch(26% 0.02 62);
+  --muted: oklch(47% 0.018 73);
+  --quiet: oklch(58% 0.017 75);
+  --text-body: oklch(37% 0.018 67);
+  --line: oklch(88% 0.014 77);
+  --orange: oklch(55% 0.16 42);
+  --pale: oklch(94% 0.035 52);
+  --green: oklch(47% 0.075 145);
+  --surface-nav: oklch(95.1% 0.016 74);
+  --surface-soft: oklch(96.5% 0.015 77);
+  --surface-hover: oklch(93.2% 0.022 53);
+  --accent-ink: oklch(43% 0.12 42);
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
   --serif: "Yu Mincho", "Hiragino Mincho ProN", "Noto Serif JP", serif;
 }
 * {
@@ -34,8 +44,9 @@ button {
   cursor: pointer;
 }
 button:focus-visible,
-textarea:focus-visible {
-  outline: 2px solid #d8663d;
+textarea:focus-visible,
+.chat-scroll:focus-visible {
+  outline: 2px solid var(--orange);
   outline-offset: 2px;
 }
 button:disabled {
@@ -47,6 +58,7 @@ button:disabled {
   min-height: 620px;
   display: grid;
   grid-template-columns: 64px 248px minmax(500px, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
   background: var(--paper);
 }
@@ -64,7 +76,7 @@ button:disabled {
   height: 35px;
   background: var(--orange);
   border-radius: 12px;
-  color: white;
+  color: var(--paper);
   display: grid;
   place-items: center;
   font-size: 22px;
@@ -281,6 +293,12 @@ button:disabled {
 .recent-item:hover {
   color: #34332f;
 }
+.recent-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .recent-bullet {
   width: 5px;
   height: 5px;
@@ -373,6 +391,7 @@ button:disabled {
 }
 .main {
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -439,6 +458,7 @@ button:disabled {
 .workspace {
   display: grid;
   grid-template-columns: minmax(400px, 1fr) 284px;
+  grid-template-rows: minmax(0, 1fr);
   flex: 1;
   min-height: 0;
 }
@@ -511,7 +531,11 @@ button:disabled {
 .chat-scroll {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
   padding: 4px 36px 14px;
   scrollbar-width: thin;
   scrollbar-color: #d9d4ca transparent;
@@ -590,15 +614,97 @@ button:disabled {
   border-radius: 5px;
 }
 .bubble {
-  font-size: 12px;
-  line-height: 1.95;
+  font-size: 15px;
+  line-height: 1.85;
   color: #55534c;
-  max-width: 710px;
+  max-width: 70ch;
+  overflow-wrap: anywhere;
   user-select: text;
 }
+.bubble > :first-child {
+  margin-top: 0;
+}
+.bubble > :last-child {
+  margin-bottom: 0;
+}
+.bubble p {
+  margin: 0 0 0.9em;
+}
+.bubble h1,
+.bubble h2,
+.bubble h3 {
+  margin: 1.25em 0 0.45em;
+  color: var(--ink);
+  line-height: 1.35;
+}
+.bubble h1 {
+  font-size: 1.3em;
+}
+.bubble h2 {
+  font-size: 1.16em;
+}
+.bubble h3 {
+  font-size: 1.06em;
+}
+.bubble ul,
+.bubble ol {
+  margin: 0.55em 0 0.9em;
+  padding-left: 1.4em;
+}
+.bubble li + li {
+  margin-top: 0.3em;
+}
+.bubble blockquote {
+  margin: 0.8em 0;
+  padding: 0.7em 1em;
+  border: 1px solid color-mix(in oklch, var(--orange) 20%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--pale) 55%, var(--white));
+  color: var(--ink);
+}
+.bubble pre {
+  max-width: 100%;
+  overflow: auto;
+  margin: 0.8em 0;
+  padding: 0.85em 1em;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-nav);
+  line-height: 1.6;
+}
+.bubble code {
+  padding: 0.08em 0.32em;
+  border-radius: 4px;
+  background: var(--surface-hover);
+  color: var(--accent-ink);
+  font-size: 0.9em;
+}
+.bubble pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+.bubble table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+.bubble th,
+.bubble td {
+  padding: 0.45em 0.65em;
+  border: 1px solid var(--line);
+  text-align: left;
+}
+.bubble th {
+  background: var(--surface-nav);
+  color: var(--ink);
+}
 .bubble ruby rt {
-  font-size: 8px;
-  color: #999;
+  font-size: 0.52em;
+  color: var(--muted);
+  line-height: 1;
 }
 .message-row.user {
   flex-direction: row-reverse;
@@ -699,9 +805,9 @@ button:disabled {
   outline: 0;
   background: transparent;
   padding: 13px 14px 7px;
-  font-size: 11px;
-  line-height: 1.6;
-  color: #393832;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--ink);
   min-height: 47px;
   max-height: 140px;
 }
@@ -2379,11 +2485,20 @@ button:disabled {
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --paper: #181816;
-    --white: #22221f;
-    --ink: #efede6;
-    --muted: #a5a197;
-    --line: #36352f;
+    --paper: oklch(20.5% 0.012 75);
+    --white: oklch(25% 0.012 75);
+    --ink: oklch(93% 0.01 82);
+    --muted: oklch(76% 0.014 78);
+    --quiet: oklch(66% 0.013 77);
+    --text-body: oklch(83% 0.012 78);
+    --line: oklch(35% 0.012 75);
+    --orange: oklch(74% 0.12 43);
+    --pale: oklch(30% 0.03 52);
+    --surface-nav: oklch(23% 0.015 72);
+    --surface-soft: oklch(22% 0.013 75);
+    --surface-hover: oklch(31% 0.025 55);
+    --accent-ink: oklch(80% 0.1 50);
+    --green: oklch(74% 0.07 145);
   }
   body,
   .app-shell,
@@ -2486,7 +2601,7 @@ button:disabled {
     color: #e4dfd4;
   }
   .bubble {
-    color: #d3cec3;
+    color: var(--text-body);
   }
   .sidebar-bottom .study-card-top,
   .study-card p,
@@ -2594,8 +2709,9 @@ button:disabled {
   font-size: 12px;
 }
 .recent-item.current {
-  color: var(--ink);
-  background: #f4f1ea;
+  color: var(--accent-ink);
+  background: var(--pale);
+  border-radius: 8px;
 }
 .recent-empty {
   margin: 4px 8px 8px;
@@ -3390,5 +3506,154 @@ button:disabled {
   }
   .rail-button.active {
     background: #2b2923;
+  }
+}
+
+/* Sensei's reading surface: warm paper, readable ink, and sparing fox orange. */
+.rail,
+.sidebar {
+  background: var(--surface-nav);
+}
+.topbar,
+.context-panel {
+  background: var(--surface-soft);
+}
+.rail-button {
+  color: var(--muted);
+}
+.rail-button:hover,
+.rail-button.active {
+  background: var(--surface-hover);
+  color: var(--accent-ink);
+}
+.nav-item.selected {
+  background: var(--pale);
+  color: var(--accent-ink);
+}
+.nav-item.selected svg,
+.new-chat svg {
+  color: var(--orange);
+}
+.new-chat:hover {
+  border-color: color-mix(in oklch, var(--orange) 35%, var(--line));
+  background: var(--pale);
+}
+.chat-heading h1,
+.feature-heading h1,
+.crumb b,
+.message-meta b,
+.context-title {
+  color: var(--ink);
+}
+.chat-heading p,
+.eyebrow,
+.crumb,
+.message-meta > span,
+.starter-prompts p,
+.privacy-note {
+  color: var(--muted);
+}
+.bubble {
+  color: var(--text-body);
+}
+.message-row.user .bubble {
+  background: var(--surface-nav);
+  border-color: var(--line);
+  color: var(--ink);
+}
+.message-tools button,
+.starter-prompts button {
+  background: var(--white);
+  border-color: var(--line);
+  color: var(--ink);
+}
+.message-tools button:hover,
+.starter-prompts button:hover {
+  border-color: color-mix(in oklch, var(--orange) 48%, var(--line));
+  background: var(--pale);
+  color: var(--accent-ink);
+}
+.composer-wrap {
+  padding-top: 14px;
+}
+.composer {
+  border-color: var(--line);
+  border-radius: 14px;
+  background: var(--white);
+  box-shadow: 0 5px 18px color-mix(in oklch, var(--ink) 7%, transparent);
+}
+.composer:focus-within {
+  border-color: color-mix(in oklch, var(--orange) 52%, var(--line));
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--orange) 18%, transparent);
+}
+.composer textarea::placeholder,
+.composer-hint,
+.tool-button {
+  color: var(--muted);
+}
+.bubble {
+  font-size: 15px;
+  line-height: 1.85;
+}
+.message-meta b {
+  font-size: 12px;
+}
+.message-meta > span {
+  font-size: 11px;
+}
+.starter-prompts button {
+  min-height: 52px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.privacy-note {
+  font-size: 11px;
+}
+
+@media (prefers-color-scheme: dark) {
+  body,
+  .app-shell,
+  .main {
+    background: var(--paper);
+    color: var(--ink);
+  }
+  .rail,
+  .sidebar,
+  .topbar {
+    background: var(--surface-nav);
+    border-color: var(--line);
+  }
+  .context-panel {
+    background: var(--surface-soft);
+    border-color: var(--line);
+  }
+  .rail-button:hover,
+  .rail-button.active {
+    background: var(--surface-hover);
+    color: var(--orange);
+  }
+  .message-row.user .bubble {
+    background: var(--surface-nav);
+    border-color: var(--line);
+    color: var(--ink);
+  }
+  .message-tools button,
+  .starter-prompts button {
+    background: var(--surface-nav);
+    border-color: var(--line);
+    color: var(--ink);
+  }
+  .composer {
+    background: var(--surface-soft);
+    border-color: var(--line);
+  }
+  .composer textarea {
+    color: var(--ink);
+  }
+  .bubble blockquote {
+    background: color-mix(in oklch, var(--pale) 72%, var(--white));
+  }
+  .bubble pre {
+    background: var(--surface-nav);
   }
 }

@@ -251,7 +251,7 @@ const server = http.createServer(async (req, res) => {
         ? 1200
         : payload.mode === "extract-card"
           ? 450
-          : 600;
+          : 850;
     const upstream = await fetch(`${base}/chat/completions`, {
       method: "POST",
       headers: {
@@ -262,7 +262,7 @@ const server = http.createServer(async (req, res) => {
       body: JSON.stringify({
         model,
         messages,
-        temperature: 0.55,
+        temperature: 0.42,
         reasoning_effort: "none",
         max_tokens: maxTokens,
         stream: shouldStream,
